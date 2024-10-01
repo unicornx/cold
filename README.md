@@ -8,3 +8,6 @@ See more on my blog series:
 - [开发一个链接器（2）](https://jia.je/software/2024/03/30/write-a-linker-2/)
 - [开发一个链接器（3）](https://jia.je/software/2024/04/06/write-a-linker-3/)
 - [开发一个链接器（4）](https://jia.je/software/2024/04/07/write-a-linker-4/)
+
+
+链接器的工作原理: https://jia.je/software/2023/05/06/linker/

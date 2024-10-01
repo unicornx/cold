@@ -224,11 +224,17 @@ impl<'a> Linker<'a> {
             dynamic_symbols: vec![],
             plt_dynamic_symbols: vec![],
         };
+        info!("----> linker.read_files()");
         linker.read_files()?;
+        info!("----> linker.parse_files()");
         linker.parse_files()?;
+        info!("----> linker.generate_plt()");
         linker.generate_plt()?;
+        info!("----> linker.reserve()");
         linker.reserve(&mut arena)?;
+        info!("----> linker.relocate()");
         linker.relocate()?;
+        info!("----> linker.write()");
         linker.write()?;
 
         // done, save to file
@@ -280,6 +286,7 @@ impl<'a> Linker<'a> {
         } = self;
 
         // parse files and resolve symbols
+        // 这里直接调用现成的 object 库，对文件进行解析
         let mut objs = vec![];
         for file in files {
             info!("Parsing {}", file.name);
@@ -303,12 +310,16 @@ impl<'a> Linker<'a> {
             }
         }
 
+        // 基于 object 库的 parse 结果做进一步的分析处理，这里是业务相关逻辑了
         for (name, obj) in objs {
             let _span = info_span!("file", name).entered();
             match obj {
+                // 目前只针对 elf64 进行处理
                 object::File::Elf64(elf) => {
+                    info!("----> 2");
                     if elf.kind() == ObjectKind::Dynamic {
                         // linked against dynamic library
+                        info!("----> 2.1");
                         self.dynamic_link = true;
                         self.needed.push(Needed {
                             name: name.clone(),
@@ -328,17 +339,29 @@ impl<'a> Linker<'a> {
                         continue;
                     }
 
+                    info!("----> 3");
                     // collect section sizes prior to this object
                     let section_sizes: BTreeMap<String, u64> = output_sections
                         .iter()
                         .map(|(key, value)| (key.clone(), value.content.len() as u64))
                         .collect();
 
+                    // 对当前文件的所有 section 都过一遍
+                    info!("----> Scaning sections ......");
                     for section in elf.sections() {
                         let name = section.name()?;
+                        info!("----> section's name is {}", name);
                         if !name.is_empty() {
                             let _span = info_span!("section", name).entered();
                             let data = section.data()?;
+                            // 下面的语句作用如下：
+                            // 将 sh_flags 中没有标识为 SHF_ALLOC 的过滤掉
+                            // SHF_ALLOC：The section will be loaded to virtual memory at runtime.
+                            // 也就是说只有这些 section 需要留下来写到 output section 中去
+                            // 此外，对于 SHF_ALLOC 的 section 记录该 section 
+                            // - 是否是可执行的（SHF_EXECINSTR: Contains executable instructions），
+                            // - 或者是否是可写的（SHF_WRITE: Writable at runtime）
+                            // 通过 match 的返回值给 is_executable 和 is_writable 赋值
                             let (is_executable, is_writable) = match section.flags() {
                                 object::SectionFlags::Elf { sh_flags } => {
                                     if ((sh_flags as u32) & object::elf::SHF_ALLOC) == 0 {
@@ -355,6 +378,7 @@ impl<'a> Linker<'a> {
                             };
 
                             // copy to output
+                            info!("----> copy to output");
                             let out = output_sections
                                 .entry(name.to_string())
                                 .or_insert_with(OutputSection::default);
@@ -370,8 +394,11 @@ impl<'a> Linker<'a> {
                             out.is_executable |= is_executable;
                             out.is_writable |= is_writable;
                             out.is_bss |= section.kind() == object::SectionKind::UninitializedData;
+                            // 当前 section 中可能存在有待 relocation 的内容
                             for (offset, relocation) in section.relocations() {
+                                info!("----> There exits some relocations in this section.");
                                 match relocation.target() {
+                                    // 目前对 relocation.target() 只处理了符号一种类型
                                     object::RelocationTarget::Symbol(symbol_id) => {
                                         let symbol = elf.symbol_by_index(symbol_id)?;
                                         if symbol.kind() == object::SymbolKind::Section {
@@ -426,13 +453,24 @@ impl<'a> Linker<'a> {
                             }
                         }
                     }
+                    // End of Scaning sections ......
 
+                    info!("----> Scaning symbols ......");
                     for symbol in elf.symbols() {
+                        // 这会过滤掉 Ndx 为 UND 以及 Type 为 SECTION 的那些符号
+                        // $ readelf -s helloworld_asm.o 
+                        // Symbol table '.symtab' contains 4 entries:
+                        // Num:    Value          Size Type    Bind   Vis      Ndx Name
+                        //   0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+                        //   1: 0000000000000000     0 SECTION LOCAL  DEFAULT    5 .rodata
+                        //   2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT    5 hello
+                        //   3: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT    1 _start
                         if !symbol.is_undefined()
                             && symbol.kind() != object::SymbolKind::Section
                             && symbol.kind() != object::SymbolKind::File
                         {
                             let name = symbol.name()?;
+                            info!("----> symbol: {}", name);
                             match symbol.section() {
                                 object::SymbolSection::Section(section_index) => {
                                     let section = elf.section_by_index(section_index)?;
@@ -468,10 +506,11 @@ impl<'a> Linker<'a> {
                             }
                         }
                     }
+                    // End of Scanning symbols ......
                 }
                 _ => return Err(anyhow!("Unsupported format of file {}", name)),
             }
-        }
+        } // End of Scanning obj files
 
         if opt.shared || self.dynamic_link {
             // add _DYNAMIC symbol

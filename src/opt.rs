@@ -1,8 +1,22 @@
 use anyhow::{anyhow, bail};
 
+// 参考 https://maskray.me/blog/2020-11-15-explain-gnu-linker-options
+// -Bstatic, --whole-archive, --as-needed等都是表示boolean狀態的position-dependent選項。
+// --push-state可以保存這些選項的boolean狀態，--pop-state則會還原。
 /// handle --push-state/--pop-state
 #[derive(Debug, Copy, Clone)]
 struct OptStack {
+    // 参考 https://blog.csdn.net/itworld123/article/details/124467173
+    // 在生成可执行文件的时候，通过 -lxxx 选项指定需要链接的库文件。以动态库为例，
+    // 如果我们指定了一个需要链接的库，则连接器会在可执行文件的文件头中会记录下
+    // 该库的信息。而后，在可执行文件运行的时候，动态加载器会读取文件头信息，并
+    // 加载所有的链接库。在这个过程中，如果用户指定链接了一个毫不相关的库，则这
+    // 个库在最终的可执行程序运行时也会被加载，如果类似这样的不相关库很多，会明
+    // 显拖慢程序启动过程。
+    // 这时，通过指定 --as-needed 选项，链接过程中，链接只会检查所有的依赖库，
+    // 没有实际被引用的库，不再写入可执行文件头。最终生成的可执行文件头中包含的
+    // 都是必要的链接库信息。
+    // --no-as-needed 选项不会做这样的检查，会把用户指定的链接库完全写入可执行文件中。
     /// --as-needed
     pub as_needed: bool,
     /// -static
@@ -52,7 +66,10 @@ impl Default for HashStyle {
     }
 }
 
+// 有关 derive 的介绍：https://doc.rust-lang.org/rust-by-example/trait/derive.html
+// Default, to create an empty instance of a data type. 所以我们就可以调用 Opt::default();
 #[derive(Debug, Clone, Default)]
+// 参考 https://sourceware.org/binutils/docs/ld/Options.html
 pub struct Opt {
     /// --build-id
     pub build_id: bool,
@@ -62,6 +79,9 @@ pub struct Opt {
     pub pie: bool,
     /// -shared
     pub shared: bool,
+    // What does the 'emulation' do in the Linker?：https://softwareengineering.stackexchange.com/questions/373269/what-does-the-emulation-do-in-the-linker
+    // 简单解释了 -m 被叫做 eMulate 的历史来源。
+    // 如果要查看 ld 支持的 emulations, 可以运行 `ld --verbose` 或者 `ld -V`
     /// -m emulation
     pub emulation: Option<String>,
     /// -o output
